@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SPJ Import</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap');
+    :root {
+      --bg:#f4f2ee; --surface:#ffffff; --border:#ddd8d0;
+      --accent:#1a5c8a; --accent2:#e85d2f;
+      --text:#1c1a17; --muted:#7a7368;
+      --success:#1e6e42; --error:#c0392b;
+    }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { font-family:'DM Sans',sans-serif; background:var(--bg); color:var(--text); padding:16px; }
+
+    h2 { font-size:15px; font-weight:600; margin-bottom:16px; display:flex; align-items:center; gap:8px; }
+    h2 .sub { font-family:'DM Mono',monospace; font-size:10px; color:var(--muted); font-weight:400; letter-spacing:0.08em; }
+
+    /* Login */
+    #login-panel { text-align:center; padding:32px 16px; }
+    #login-panel p { font-size:13px; color:var(--muted); margin-bottom:16px; }
+
+    /* Dropzone */
+    #dropzone {
+      border:2px dashed var(--border); border-radius:8px; padding:28px 16px;
+      text-align:center; cursor:pointer; transition:all 0.2s; background:var(--surface);
+      margin-bottom:12px;
+    }
+    #dropzone:hover, #dropzone.drag-over { border-color:var(--accent); background:#e8f0f8; }
+    #dropzone.has-file { border-style:solid; border-color:var(--accent); background:#eef4fb; }
+    #dropzone .dz-icon { font-size:28px; margin-bottom:6px; }
+    #dropzone .dz-label { font-size:12px; color:var(--muted); line-height:1.5; }
+    #dropzone .dz-name { font-family:'DM Mono',monospace; font-size:11px; color:var(--accent); font-weight:500; margin-top:4px; word-break:break-all; }
+    #file-input { display:none; }
+
+    /* Velden */
+    .field { margin-bottom:10px; }
+    .field label { display:block; font-size:11px; font-weight:500; color:var(--muted); margin-bottom:4px; text-transform:uppercase; letter-spacing:0.06em; }
+    .field input {
+      width:100%; border:1px solid var(--border); border-radius:5px;
+      padding:7px 10px; font-family:'DM Sans',sans-serif; font-size:13px;
+      background:var(--surface); color:var(--text); outline:none; transition:border-color 0.15s;
+    }
+    .field input:focus { border-color:var(--accent); }
+
+    /* Knoppen */
+    .btn {
+      width:100%; padding:10px; border:none; border-radius:6px;
+      font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600;
+      cursor:pointer; transition:all 0.15s; margin-bottom:8px;
+    }
+    .btn-primary { background:var(--accent); color:white; }
+    .btn-primary:hover:not(:disabled) { background:#154e78; }
+    .btn-primary:disabled { background:var(--border); color:var(--muted); cursor:not-allowed; }
+    .btn-outline { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+    .btn-outline:hover { background:#eef4fb; }
+    .spinner {
+      display:inline-block; width:12px; height:12px;
+      border:2px solid rgba(255,255,255,0.3); border-top-color:white;
+      border-radius:50%; animation:spin 0.7s linear infinite;
+      vertical-align:middle; margin-right:5px;
+    }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* Log */
+    #log {
+      background:#1c1a17; border-radius:6px; padding:10px;
+      font-family:'DM Mono',monospace; font-size:10px; line-height:1.8;
+      color:rgba(255,255,255,0.6); max-height:140px; overflow-y:auto; margin-top:12px;
+    }
+    .l-ok   { color:#6ee7a0; }
+    .l-err  { color:#f87171; }
+    .l-info { color:#93c5fd; }
+    .l-dim  { color:rgba(255,255,255,0.3); }
+
+    /* Resultaat */
+    #result { display:none; margin-top:12px; background:#eef7f0; border:1px solid #a8d5b5; border-radius:6px; padding:10px; font-size:12px; }
+    #result.show { display:block; }
+    #result strong { color:var(--success); }
+    #result a { display:block; color:var(--accent); margin-top:4px; text-decoration:none; font-size:11px; }
+    #result a:hover { text-decoration:underline; }
+
+    /* User badge */
+    #user-info { font-size:11px; color:var(--muted); margin-bottom:14px; display:none; }
+    #user-info span { color:var(--accent); font-weight:500; }
+  </style>
+</head>
+<body>
+
+<h2>&#128205; SPJ Importeren <span class="sub">TRIMBLE → AGOL</span></h2>
+
+<!-- Stap 1: Inloggen -->
+<div id="login-panel">
+  <p>Log in met je ArcGIS Online account om SPJ-bestanden te importeren.</p>
+  <button class="btn btn-primary" onclick="doLogin()">Inloggen bij ArcGIS Online</button>
+</div>
+
+<!-- Stap 2: Import (verborgen tot ingelogd) -->
+<div id="import-panel" style="display:none">
+  <div id="user-info">Ingelogd als <span id="username-label"></span> &nbsp;·&nbsp; <a href="#" onclick="doLogout()" style="color:var(--muted)">uitloggen</a></div>
+
+  <div id="dropzone" onclick="document.getElementById('file-input').click()">
+    <div class="dz-icon">&#128194;</div>
+    <div class="dz-label">Sleep een <strong>.spj</strong> bestand hierheen<br>of klik om te bladeren</div>
+  </div>
+  <input type="file" id="file-input" accept=".spj">
+
+  <div class="field">
+    <label>Laagtitel</label>
+    <input type="text" id="layer-title" placeholder="bijv. Riolering Meppel 2024">
+  </div>
+  <div class="field">
+    <label>Map in ArcGIS Online</label>
+    <input type="text" id="output-folder" value="SPJ Imports">
+  </div>
+
+  <button class="btn btn-primary" id="import-btn" disabled onclick="doImport()">Importeren &#8594;</button>
+
+  <div id="log"><span class="l-dim">Wacht op bestand...</span></div>
+  <div id="result"><strong>&#10003; Klaar!</strong><div id="result-links"></div></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════
+//  CONFIG — pas ORG aan naar jouw AGOL
+// ═══════════════════════════════════════
+const PORTAL   = 'https://www.arcgis.com';
+const CLIENT_ID = 'rWDFsznYbXpHFNH3'; // ← Vervang dit (zie instructies onderaan)
+
+let TOKEN = '', USERNAME = '';
+
+// ── OAUTH LOGIN ────────────────────────
+function doLogin() {
+  const redirect = encodeURIComponent(window.location.href.split('?')[0]);
+  const url = `${PORTAL}/sharing/rest/oauth2/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${redirect}&expiration=120`;
+  window.location.href = url;
+}
+
+function doLogout() {
+  TOKEN = ''; USERNAME = '';
+  document.getElementById('login-panel').style.display = '';
+  document.getElementById('import-panel').style.display = 'none';
+}
+
+// Check of we terugkomen van OAuth redirect (token in URL hash)
+function checkOAuthCallback() {
+  const hash = window.location.hash;
+  if (!hash.includes('access_token')) return false;
+  const params = new URLSearchParams(hash.replace('#',''));
+  TOKEN = params.get('access_token');
+  if (!TOKEN) return false;
+  // Verwijder token uit URL
+  history.replaceState(null,'', window.location.pathname + window.location.search);
+  return true;
+}
+
+async function initAuth() {
+  const fromRedirect = checkOAuthCallback();
+  if (fromRedirect || TOKEN) {
+    // Haal gebruikersnaam op
+    try {
+      const form = new FormData();
+      form.append('f','json'); form.append('token',TOKEN);
+      const res  = await fetch(`${PORTAL}/sharing/rest/community/self`, {method:'POST',body:form});
+      const data = await res.json();
+      USERNAME = data.username;
+      document.getElementById('username-label').textContent = USERNAME;
+      document.getElementById('login-panel').style.display = 'none';
+      document.getElementById('import-panel').style.display = '';
+      document.getElementById('user-info').style.display = '';
+      log(`Ingelogd als ${USERNAME}`, 'ok');
+    } catch(e) {
+      log('Inloggen mislukt: ' + e.message, 'err');
+    }
+  }
+}
+initAuth();
+
+// ═══════════════════════════════════════
+//  SPJ PARSER
+// ═══════════════════════════════════════
+const OY=84, OX=92, OZ=100;
+
+function readU16(b,o){let e=o;while(e+1<b.length&&!(b[e]===0&&b[e+1]===0))e+=2;return new TextDecoder('utf-16le').decode(b.slice(o,e));}
+function nextU16(b,o,d=120){let i=o,e=Math.min(o+d,b.length-2);while(i<e){if(b[i]>=0x20&&b[i]<=0x7E&&b[i+1]===0){const s=readU16(b,i);if(s.length>=2)return s;}i+=2;}return '';}
+function readF64(v,o){return o+8>v.byteLength?null:v.getFloat64(o,true);}
+function findPat(b,p){const r=[];outer:for(let i=0;i<=b.length-p.length;i++){for(let j=0;j<p.length;j++)if(b[i+j]!==p[j])continue outer;r.push(i);}return r;}
+
+function parseSpj(buf) {
+  const b=new Uint8Array(buf), v=new DataView(buf);
+  const SKIP=['tablet','sams','trimble','sps','eap','topo','linept'];
+  const cands=[];
+  for(const pos of findPat(b,[0x54,0x00,0x6F,0x00,0x70,0x00,0x6F,0x00])){const n=readU16(b,pos);if(/^Topo[\d+]*$/.test(n))cands.push({pos,type:'topo',name:n});}
+  for(const pos of findPat(b,[0x4C,0x00,0x69,0x00,0x6E,0x00,0x65,0x00,0x50,0x00,0x74,0x00])){const n=readU16(b,pos);if(/^LinePt\d*$/.test(n))cands.push({pos,type:'linept',name:n});}
+  cands.sort((a,b)=>a.pos-b.pos);
+  const topo=[],linept=[];
+  for(const{pos,type,name}of cands){
+    const y=readF64(v,pos+OY),x=readF64(v,pos+OX),z=readF64(v,pos+OZ);
+    if(!x||!y||!z)continue;
+    if(!(x>7000&&x<300000&&y>289000&&y<629000))continue;
+    if(!(z>-50&&z<500))continue;
+    let code=nextU16(b,pos+name.length*2+2,80);
+    if(SKIP.some(s=>code.toLowerCase().includes(s)))code='';
+    (type==='topo'?topo:linept).push({name,code,x,y,z});
+  }
+  return{topo,linept};
+}
+
+// ── GEOJSON ────────────────────────────
+const CRS={type:'name',properties:{name:'urn:ogc:def:crs:EPSG::28992'}};
+function mkPointGJ(pts){return{type:'FeatureCollection',crs:CRS,features:pts.map(p=>({type:'Feature',geometry:{type:'Point',coordinates:[p.x,p.y]},properties:{naam:p.name,code:p.code,hoogte:Math.round(p.z*1000)/1000}}))}}
+function mkLineGJ(pts){
+  const g={},ex=[];
+  for(const p of pts)(g[p.code||'onbekend']=g[p.code||'onbekend']||[]).push(p);
+  const f=[];
+  for(const[c,gp]of Object.entries(g)){if(gp.length<2){ex.push(...gp);continue;}f.push({type:'Feature',geometry:{type:'LineString',coordinates:gp.map(p=>[p.x,p.y])},properties:{code:c,aantal_pt:gp.length}});}
+  return[{type:'FeatureCollection',crs:CRS,features:f},ex];
+}
+
+// ── AGOL REST ──────────────────────────
+async function ap(path,form){
+  form.append('f','json');form.append('token',TOKEN);
+  const r=await fetch(`${PORTAL}/sharing/rest${path}`,{method:'POST',body:form});
+  const d=await r.json();
+  if(d.error)throw new Error(d.error.message||JSON.stringify(d.error));
+  return d;
+}
+async function uploadGJ(gj,title,folder){
+  const blob=new Blob([JSON.stringify(gj)],{type:'application/json'});
+  const f=new FormData();
+  f.append('file',blob,title+'.geojson');f.append('filename',title+'.geojson');
+  f.append('title',title);f.append('type','GeoJson');f.append('tags','SPJ,Trimble');
+  if(folder)f.append('folder',folder);
+  return(await ap(`/content/users/${USERNAME}/addItem`,f)).id;
+}
+async function publish(itemId,title){
+  const f=new FormData();
+  f.append('itemId',itemId);f.append('outputType','FeatureCollection');
+  f.append('publishParameters',JSON.stringify({name:title.replace(/[^a-zA-Z0-9_]/g,'_'),hasStaticData:false,maxRecordCount:2000,capabilities:'Query',spatialReference:{wkid:28992}}));
+  const d=await ap(`/content/users/${USERNAME}/publish`,f);
+  return d.services?.[0]?.serviceItemId;
+}
+async function delExisting(title){
+  const f=new FormData();f.append('q',`title:"${title}" owner:${USERNAME} type:"Feature Service"`);f.append('num','5');
+  const d=await ap('/search',f);
+  for(const item of(d.results||[])){if(item.title===title){const df=new FormData();await ap(`/content/users/${USERNAME}/items/${item.id}/delete`,df);}}
+}
+async function getUrl(id){
+  if(!id)return null;
+  const f=new FormData();
+  const d=await ap(`/content/items/${id}`,f);
+  return d.url?d.url+'/0':null;
+}
+
+// ── UI ─────────────────────────────────
+const logEl=document.getElementById('log');
+function log(m,t='info'){const s=document.createElement('span');s.className=`l-${t}`;s.textContent=`> ${m}\n`;logEl.appendChild(s);logEl.scrollTop=logEl.scrollHeight;}
+function clearLog(){logEl.innerHTML='';}
+
+let selFile=null;
+function setFile(f){
+  if(!f||!f.name.toLowerCase().endsWith('.spj')){log('Alleen .spj bestanden.','err');return;}
+  selFile=f;
+  const dz=document.getElementById('dropzone');
+  dz.classList.add('has-file');
+  dz.innerHTML=`<div class="dz-icon">&#128196;</div><div class="dz-name">${f.name}</div><div class="dz-label" style="font-size:11px;margin-top:2px">${(f.size/1024).toFixed(1)} KB</div>`;
+  if(!document.getElementById('layer-title').value)document.getElementById('layer-title').value=f.name.replace(/\.spj$/i,'');
+  updateBtn();
+}
+const dz=document.getElementById('dropzone');
+dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('drag-over');});
+dz.addEventListener('dragleave',()=>dz.classList.remove('drag-over'));
+dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('drag-over');setFile(e.dataTransfer.files[0]);});
+document.getElementById('file-input').addEventListener('change',e=>setFile(e.target.files[0]));
+document.getElementById('layer-title').addEventListener('input',updateBtn);
+function updateBtn(){document.getElementById('import-btn').disabled=!(selFile&&TOKEN&&document.getElementById('layer-title').value);}
+
+async function doImport(){
+  const btn=document.getElementById('import-btn');
+  const title=document.getElementById('layer-title').value.trim();
+  const folder=document.getElementById('output-folder').value.trim();
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>Bezig...';
+  clearLog();document.getElementById('result').classList.remove('show');
+  try{
+    log('Bestand inlezen...','info');
+    const buf=await selFile.arrayBuffer();
+    log('SPJ parsen...','info');
+    const{topo,linept}=parseSpj(buf);
+    log(`${topo.length} punten, ${linept.length} lijnpunten`,'ok');
+    if(!topo.length&&!linept.length)throw new Error('Geen punten gevonden.');
+
+    let pgj=mkPointGJ(topo);
+    const[lgj,ex]=mkLineGJ(linept);
+    if(ex.length)pgj.features.push(...mkPointGJ(ex).features);
+
+    let pid=null,lid=null;
+    if(pgj.features.length){
+      log('Puntlaag uploaden en publiceren...','info');
+      await delExisting(`${title} - punten`);
+      pid=await publish(await uploadGJ(pgj,`${title} - punten`,folder),`${title} - punten`);
+      log('Puntlaag klaar','ok');
+    }
+    if(lgj.features.length){
+      log('Lijnlaag uploaden en publiceren...','info');
+      await delExisting(`${title} - lijnen`);
+      lid=await publish(await uploadGJ(lgj,`${title} - lijnen`,folder),`${title} - lijnen`);
+      log('Lijnlaag klaar','ok');
+    }
+
+    await new Promise(r=>setTimeout(r,3000));
+    log(`Klaar! ${pgj.features.length} punten, ${lgj.features.length} lijnen`,'ok');
+
+    const links=document.getElementById('result-links');
+    links.innerHTML='';
+    if(pid)links.innerHTML+=`<a href="${PORTAL}/home/item.html?id=${pid}" target="_blank">&#128279; Puntlaag in ArcGIS Online</a>`;
+    if(lid)links.innerHTML+=`<a href="${PORTAL}/home/item.html?id=${lid}" target="_blank">&#128279; Lijnlaag in ArcGIS Online</a>`;
+    document.getElementById('result').classList.add('show');
+  }catch(e){log('Fout: '+e.message,'err');console.error(e);}
+  finally{btn.disabled=false;btn.innerHTML='Importeren &#8594;';updateBtn();}
+}
+</script>
+
+<!--
+=== INSTRUCTIES: CLIENT_ID instellen ===
+
+1. Ga naar: https://www.arcgis.com/home/item.html (ingelogd)
+2. Ga naar Inhoud > Nieuw item > Applicatieregistratie
+3. Redirect URI: de URL waar deze pagina straks staat in EXB
+4. Kopieer de Client ID en vervang 'YOUR_CLIENT_ID' bovenaan dit bestand
+-->
+</body>
+</html>
