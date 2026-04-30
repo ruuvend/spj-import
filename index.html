@@ -38,7 +38,7 @@ h2 span{font-family:'DM Mono',monospace;font-size:10px;color:#7a7368;letter-spac
   <div class="lbl">Sleep een <strong>.spj</strong> bestand hierheen<br>of klik om te bladeren</div>
 </div>
 <input type="file" id="fi" accept=".spj">
-<button class="btn btn-p" id="btn" disabled onclick="doConvert()">Omzetten naar Shapefile &#8594;</button>
+<button class="btn btn-p" id="btn" disabled onclick="doConvert()">Omzetten naar GeoJSON &#8594;</button>
 <div id="log"><span class="di">Wacht op bestand...</span></div>
 <div id="res"><strong>&#10003; Klaar!</strong><br><div id="dl"></div></div>
 
@@ -234,7 +234,8 @@ function buildDbf(records, fields){
 
 // ── PRJ — RD New (EPSG:28992) ───────────────────────────────────────────────
 function buildPrj(){
-  return 'PROJCS["Amersfoort_RD_New",GEOGCS["GCS_Amersfoort",DATUM["D_Amersfoort",SPHEROID["Bessel_1841",6377397.155,299.1528128]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Double_Stereographic"],PARAMETER["False_Easting",155000.0],PARAMETER["False_Northing",463000.0],PARAMETER["Central_Meridian",5.38720621],PARAMETER["Scale_Factor",0.9999079],PARAMETER["Latitude_Of_Origin",52.15616056],UNIT["Meter",1.0]]';
+  // Exacte EPSG:28992 WKT met AUTHORITY tags — ArcGIS en AGOL herkennen dit direct
+  return 'PROJCS["Amersfoort / RD New",GEOGCS["Amersfoort",DATUM["Amersfoort",SPHEROID["Bessel 1841",6377397.155,299.1528128,AUTHORITY["EPSG","7004"]],TOWGS84[565.417,50.3319,465.552,-0.398957,0.343988,-1.8774,4.0725],AUTHORITY["EPSG","6289"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4289"]],PROJECTION["Oblique_Stereographic"],PARAMETER["latitude_of_origin",52.15616055555555],PARAMETER["central_meridian",5.38763888888889],PARAMETER["scale_factor",0.9999079],PARAMETER["false_easting",155000],PARAMETER["false_northing",463000],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["X",EAST],AXIS["Y",NORTH],AUTHORITY["EPSG","28992"]]';
 }
 
 // ── CONVERT ────────────────────────────────────────────────────────────────
@@ -260,50 +261,54 @@ async function doConvert(){
     }
     const allPts=[...topo,...extra];
 
-    log('Shapefile bestanden schrijven...','in');
-    const zip=new JSZip();
-    const prj=buildPrj();
+    log('GeoJSON bestanden schrijven...','in');
     const base=selFile.name.replace(/\.spj$/i,'');
 
-    // Punten
+    // GeoJSON punten
+    const puntGeoJSON = {
+      type:'FeatureCollection',
+      name:`${base}_punten`,
+      crs:{type:'name',properties:{name:'urn:ogc:def:crs:EPSG::28992'}},
+      features: allPts.map(p=>({
+        type:'Feature',
+        geometry:{type:'Point',coordinates:[p.x,p.y,p.z]},
+        properties:{naam:p.name,code:p.code,hoogte:Math.round(p.z*1000)/1000}
+      }))
+    };
+
+    // GeoJSON lijnen
+    const lijnGeoJSON = {
+      type:'FeatureCollection',
+      name:`${base}_lijnen`,
+      crs:{type:'name',properties:{name:'urn:ogc:def:crs:EPSG::28992'}},
+      features: lines.map(l=>({
+        type:'Feature',
+        geometry:{type:'LineString',coordinates:l.coords.map(([x,y])=>[x,y])},
+        properties:{code:l.code,aantal_pt:l.pts.length}
+      }))
+    };
+
+    const dl = document.getElementById('dl');
+    dl.innerHTML = '';
+
     if(allPts.length){
-      const shp=buildPointShp(allPts);
-      const shx=buildPointShx(allPts);
-      const dbf=buildDbf(
-        allPts.map(p=>({NAAM:p.name,CODE:p.code,HOOGTE:Number(p.z.toFixed(3))})),
-        [{name:'NAAM',type:'C',len:20,dec:0},{name:'CODE',type:'C',len:30,dec:0},{name:'HOOGTE',type:'N',len:10,dec:3}]
-      );
-      zip.file(`${base}_punten.shp`,shp);
-      zip.file(`${base}_punten.shx`,shx);
-      zip.file(`${base}_punten.dbf`,dbf);
-      zip.file(`${base}_punten.prj`,prj);
+      const blob=new Blob([JSON.stringify(puntGeoJSON,null,2)],{type:'application/json'});
+      const url=URL.createObjectURL(blob);
+      dl.innerHTML+=`<a class="dl-btn" href="${url}" download="${base}_punten.geojson">&#11015; Download punten.geojson (${allPts.length} punten)</a><br>`;
       log(`Puntlaag: ${allPts.length} punten`,'ok');
     }
 
-    // Lijnen
     if(lines.length){
-      const{shp,shx}=buildLineShp(lines);
-      const dbf=buildDbf(
-        lines.map(l=>({CODE:l.code,AANTAL_PT:l.pts.length})),
-        [{name:'CODE',type:'C',len:30,dec:0},{name:'AANTAL_PT',type:'N',len:5,dec:0}]
-      );
-      zip.file(`${base}_lijnen.shp`,shp);
-      zip.file(`${base}_lijnen.shx`,shx);
-      zip.file(`${base}_lijnen.dbf`,dbf);
-      zip.file(`${base}_lijnen.prj`,prj);
+      const blob=new Blob([JSON.stringify(lijnGeoJSON,null,2)],{type:'application/json'});
+      const url=URL.createObjectURL(blob);
+      dl.innerHTML+=`<a class="dl-btn" href="${url}" download="${base}_lijnen.geojson">&#11015; Download lijnen.geojson (${lines.length} lijnen)</a>`;
       log(`Lijnlaag: ${lines.length} lijnen`,'ok');
     }
-
-    log('ZIP aanmaken...','in');
-    const zipBlob=await zip.generateAsync({type:'blob'});
-    const url=URL.createObjectURL(zipBlob);
-    const fname=`${base}_shapefiles.zip`;
-    document.getElementById('dl').innerHTML=`<a class="dl-btn" href="${url}" download="${fname}">&#11015; Download ${fname}</a>`;
     document.getElementById('res').classList.add('show');
     log(`Klaar! ${allPts.length} punten en ${lines.length} lijnen.`,'ok');
 
   }catch(e){log('Fout: '+e.message,'er');console.error(e);}
-  finally{btn.disabled=false;btn.innerHTML='Omzetten naar Shapefile &#8594;';updateBtn();}
+  finally{btn.disabled=false;btn.innerHTML='Omzetten naar GeoJSON &#8594;';updateBtn();}
 }
 
 // ── UI ─────────────────────────────────────────────────────────────────────
