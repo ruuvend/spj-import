@@ -20,7 +20,6 @@ h2 span{font-family:'DM Mono',monospace;font-size:10px;color:#7a7368;letter-spac
 .btn{width:100%;padding:11px;border:none;border-radius:6px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;transition:all .15s;margin-bottom:8px}
 .btn-p{background:#1a5c8a;color:#fff}.btn-p:hover:not(:disabled){background:#154e78}
 .btn-p:disabled{background:#d8d3cb;color:#7a7368;cursor:not-allowed}
-.btn-s{background:#fff;color:#1a5c8a;border:1px solid #1a5c8a}.btn-s:hover{background:#eef4fb}
 .sp{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:5px}
 @keyframes spin{to{transform:rotate(360deg)}}
 #log{background:#1c1a17;border-radius:6px;padding:12px;font-family:'DM Mono',monospace;font-size:11px;line-height:1.8;color:rgba(255,255,255,.6);max-height:160px;overflow-y:auto;margin-top:16px}
@@ -33,18 +32,15 @@ h2 span{font-family:'DM Mono',monospace;font-size:10px;color:#7a7368;letter-spac
 </style>
 </head>
 <body>
-<h2>📍 SPJ naar Shapefile <span>TRIMBLE CONVERTER</span></h2>
-
+<h2>&#128205; SPJ naar Shapefile <span>TRIMBLE CONVERTER</span></h2>
 <div id="drop" onclick="document.getElementById('fi').click()">
-  <div class="ico">📂</div>
+  <div class="ico">&#128194;</div>
   <div class="lbl">Sleep een <strong>.spj</strong> bestand hierheen<br>of klik om te bladeren</div>
 </div>
 <input type="file" id="fi" accept=".spj">
-
-<button class="btn btn-p" id="btn" disabled onclick="doConvert()">Omzetten naar Shapefile →</button>
-
+<button class="btn btn-p" id="btn" disabled onclick="doConvert()">Omzetten naar Shapefile &#8594;</button>
 <div id="log"><span class="di">Wacht op bestand...</span></div>
-<div id="res"><strong>✓ Klaar!</strong><br><div id="dl"></div></div>
+<div id="res"><strong>&#10003; Klaar!</strong><br><div id="dl"></div></div>
 
 <script>
 // ── SPJ PARSER ──────────────────────────────────────────────────────────────
@@ -64,128 +60,181 @@ function parseSpj(buf){
     const y=rf64(v,pos+OY),x=rf64(v,pos+OX),z=rf64(v,pos+OZ);
     if(!x||!y||!z||!(x>7000&&x<300000&&y>289000&&y<629000)||!(z>-50&&z<500))continue;
     let code=nu16(b,pos+name.length*2+2,80);
-    if(SK.some(s=>code.toLowerCase().includes(s)))code='';
+    if(['tablet','sams','trimble','sps','eap','topo','linept'].some(s=>code.toLowerCase().includes(s)))code='';
     (type==='topo'?topo:linept).push({name,code,x,y,z});
   }
   return{topo,linept};
 }
 
-// ── SHAPEFILE WRITER ────────────────────────────────────────────────────────
-// Schrijft binaire SHP/SHX/DBF bestanden conform ESRI shapefile spec
+// ── SHAPEFILE HELPERS ───────────────────────────────────────────────────────
+// Gebruik DataView voor correcte byte-schrijving
+function i32be(v,dv,o){dv.setInt32(o,v,false);}
+function i32le(v,dv,o){dv.setInt32(o,v,true);}
+function f64le(v,dv,o){dv.setFloat64(o,v,true);}
 
-function writeInt32BE(v,buf,o){buf[o]=(v>>24)&0xFF;buf[o+1]=(v>>16)&0xFF;buf[o+2]=(v>>8)&0xFF;buf[o+3]=v&0xFF;}
-function writeInt32LE(v,buf,o){buf[o]=v&0xFF;buf[o+1]=(v>>8)&0xFF;buf[o+2]=(v>>16)&0xFF;buf[o+3]=(v>>24)&0xFF;}
-function writeFloat64LE(v,buf,o){const t=new DataView(new ArrayBuffer(8));t.setFloat64(0,v,true);new Uint8Array(t.buffer).forEach((b,i)=>buf[o+i]=b);}
+function writeShpHeader(dv,fileCode,fileLen,shapeType,minX,minY,maxX,maxY){
+  i32be(fileCode,dv,0);
+  i32be(fileLen,dv,24);   // file length in 16-bit words
+  i32le(1000,dv,28);      // version
+  i32le(shapeType,dv,32); // shape type
+  f64le(minX,dv,36);      // bounding box
+  f64le(minY,dv,44);
+  f64le(maxX,dv,52);
+  f64le(maxY,dv,60);
+  f64le(0,dv,68);f64le(0,dv,76); // Z range
+  f64le(0,dv,84);f64le(0,dv,92); // M range
+}
 
+// ── PUNT SHAPEFILE ──────────────────────────────────────────────────────────
 function buildPointShp(pts){
-  // SHP voor punten (type 1)
-  const recSize=28; // 8 header + 20 content per punt
-  const fileLen=50+pts.length*(recSize/2); // in 16-bit words
+  // Elke punt-record: 8 bytes record header + 4 bytes shape type + 16 bytes XY = 28 bytes
+  const recBytes = 28;
+  const fileBytes = 100 + pts.length * recBytes;
+  const fileLen = fileBytes / 2; // in 16-bit words
+
+  const buf = new ArrayBuffer(fileBytes);
+  const dv  = new DataView(buf);
+
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
   for(const p of pts){minX=Math.min(minX,p.x);minY=Math.min(minY,p.y);maxX=Math.max(maxX,p.x);maxY=Math.max(maxY,p.y);}
 
-  const buf=new Uint8Array(100+pts.length*recSize);
-  // File header
-  writeInt32BE(9994,buf,0);writeInt32BE(fileLen,buf,24);writeInt32LE(1000,buf,28);
-  writeInt32LE(1,buf,32); // shape type: point
-  writeFloat64LE(minX,buf,36);writeFloat64LE(minY,buf,44);writeFloat64LE(maxX,buf,52);writeFloat64LE(maxY,buf,60);
+  writeShpHeader(dv,9994,fileLen,1,minX,minY,maxX,maxY);
 
-  // Records
   pts.forEach((p,i)=>{
-    const o=100+i*recSize;
-    writeInt32BE(i+1,buf,o);writeInt32BE(10,buf,o+4); // record header (len in 16-bit words)
-    writeInt32LE(1,buf,o+8); // shape type
-    writeFloat64LE(p.x,buf,o+12);writeFloat64LE(p.y,buf,o+20);
+    const o = 100 + i * recBytes;
+    i32be(i+1, dv, o);      // record number (1-based)
+    i32be(10,  dv, o+4);    // content length in 16-bit words (4+16=20 bytes = 10 words)
+    i32le(1,   dv, o+8);    // shape type = point
+    f64le(p.x, dv, o+12);
+    f64le(p.y, dv, o+20);
   });
-  return buf;
+
+  return new Uint8Array(buf);
 }
 
 function buildPointShx(pts){
-  const buf=new Uint8Array(100+pts.length*8);
-  const fileLen=(50+pts.length*4);
-  writeInt32BE(9994,buf,0);writeInt32BE(fileLen,buf,24);writeInt32LE(1000,buf,28);writeInt32LE(1,buf,32);
+  const fileBytes = 100 + pts.length * 8;
+  const fileLen   = fileBytes / 2;
+  const buf = new ArrayBuffer(fileBytes);
+  const dv  = new DataView(buf);
+
+  writeShpHeader(dv,9994,fileLen,1,0,0,0,0);
+
   pts.forEach((p,i)=>{
-    const o=100+i*8;
-    writeInt32BE(50+i*14,buf,o); // offset in 16-bit words
-    writeInt32BE(10,buf,o+4);    // content length
+    const o = 100 + i * 8;
+    i32be(50 + i*14, dv, o);   // offset in 16-bit words (100 bytes header = 50 words, elke rec = 28 bytes = 14 words)
+    i32be(10,        dv, o+4); // content length in 16-bit words
   });
-  return buf;
+
+  return new Uint8Array(buf);
 }
 
+// ── LIJN SHAPEFILE ──────────────────────────────────────────────────────────
 function buildLineShp(lines){
-  // SHP voor polylines (type 3)
-  let totalPts=0;
-  for(const l of lines)totalPts+=l.coords.length;
-  const recBaseSize=8+4+16+4+4+8; // header+type+bbox+numparts+numpoints+part offset
-  const fileBytes=100+lines.reduce((s,l)=>s+8+4+16+4+4+4+l.coords.length*16,0);
+  // Per lijn-record:
+  // 8 header + 4 type + 32 bbox + 4 numparts + 4 numpoints + 4 part[0] + n*16 coords
+  const recContentBytes = line => 4+32+4+4+4+line.coords.length*16;
+  const recTotalBytes   = line => 8 + recContentBytes(line);
+
+  const fileBytes = 100 + lines.reduce((s,l)=>s+recTotalBytes(l),0);
+  const fileLen   = fileBytes / 2;
+
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-  for(const l of lines)for(const[x,y]of l.coords){minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}
+  for(const l of lines)for(const[x,y]of l.coords){
+    minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);
+  }
 
-  const buf=new Uint8Array(fileBytes);
-  writeInt32BE(9994,buf,0);writeInt32BE(fileBytes/2,buf,24);writeInt32LE(1000,buf,28);writeInt32LE(3,buf,32);
-  writeFloat64LE(minX,buf,36);writeFloat64LE(minY,buf,44);writeFloat64LE(maxX,buf,52);writeFloat64LE(maxY,buf,60);
+  const buf = new ArrayBuffer(fileBytes);
+  const dv  = new DataView(buf);
+  writeShpHeader(dv,9994,fileLen,3,minX,minY,maxX,maxY);
 
-  let off=100,shxOff=0;
-  const shxBuf=new Uint8Array(100+lines.length*8);
-  writeInt32BE(9994,shxBuf,0);writeInt32BE((50+lines.length*4),shxBuf,24);writeInt32LE(1000,shxBuf,28);writeInt32LE(3,shxBuf,32);
+  // SHX
+  const shxBytes = 100 + lines.length * 8;
+  const shxBuf   = new ArrayBuffer(shxBytes);
+  const shxDv    = new DataView(shxBuf);
+  writeShpHeader(shxDv,9994,shxBytes/2,3,minX,minY,maxX,maxY);
 
+  let off = 100;
   lines.forEach((l,i)=>{
-    const n=l.coords.length;
-    const cLen=2+8+4+4+4+n*2; // content length in 16-bit words
-    writeInt32BE(i+1,buf,off);writeInt32BE(cLen,buf,off+4);
-    writeInt32LE(3,buf,off+8);
+    const n   = l.coords.length;
+    const cLen = recContentBytes(l) / 2; // in 16-bit words
+    const shpOff = off / 2; // offset in 16-bit words
+
+    // SHX record
+    i32be(shpOff, shxDv, 100+i*8);
+    i32be(cLen,   shxDv, 100+i*8+4);
+
+    // SHP record header
+    i32be(i+1, dv, off);
+    i32be(cLen,dv, off+4);
+    off += 8;
+
+    // SHP record content
     const bx=l.coords.reduce((m,[x])=>Math.min(m,x),Infinity);
     const by=l.coords.reduce((m,[,y])=>Math.min(m,y),Infinity);
     const bX=l.coords.reduce((m,[x])=>Math.max(m,x),-Infinity);
     const bY=l.coords.reduce((m,[,y])=>Math.max(m,y),-Infinity);
-    writeFloat64LE(bx,buf,off+12);writeFloat64LE(by,buf,off+20);writeFloat64LE(bX,buf,off+28);writeFloat64LE(bY,buf,off+36);
-    writeInt32LE(1,buf,off+44);writeInt32LE(n,buf,off+48);writeInt32LE(0,buf,off+52);
-    l.coords.forEach(([x,y],j)=>{writeFloat64LE(x,buf,off+56+j*16);writeFloat64LE(y,buf,off+56+j*16+8);});
-    writeInt32BE(off/2,shxBuf,100+i*8);writeInt32BE(cLen,shxBuf,100+i*8+4);
-    off+=8+4+16+4+4+4+n*16;
+
+    i32le(3,  dv, off);     // shape type
+    f64le(bx, dv, off+4);
+    f64le(by, dv, off+12);
+    f64le(bX, dv, off+20);
+    f64le(bY, dv, off+28);
+    i32le(1,  dv, off+36);  // num parts
+    i32le(n,  dv, off+40);  // num points
+    i32le(0,  dv, off+44);  // part 0 starts at index 0
+    off += 48;
+
+    l.coords.forEach(([x,y])=>{
+      f64le(x, dv, off);
+      f64le(y, dv, off+8);
+      off += 16;
+    });
   });
-  return{shp:buf,shx:shxBuf};
+
+  return{shp:new Uint8Array(buf), shx:new Uint8Array(shxBuf)};
 }
 
-function buildDbf(records,fields){
-  // DBF schrijver (dBASE III)
-  const headerSize=32+(fields.length*32)+1;
-  const recSize=1+fields.reduce((s,f)=>s+f.len,0);
-  const buf=new Uint8Array(headerSize+records.length*recSize);
-  const enc=new TextEncoder();
+// ── DBF SCHRIJVER ───────────────────────────────────────────────────────────
+function buildDbf(records, fields){
+  const headerSize = 32 + fields.length*32 + 1;
+  const recSize    = 1 + fields.reduce((s,f)=>s+f.len,0);
+  const buf = new ArrayBuffer(headerSize + records.length*recSize);
+  const dv  = new DataView(buf);
+  const enc = new TextEncoder();
 
-  buf[0]=3; // version
+  dv.setUint8(0,3); // dBASE III
   const d=new Date();
-  buf[1]=d.getFullYear()-1900;buf[2]=d.getMonth()+1;buf[3]=d.getDate();
-  writeInt32LE(records.length,buf,4);
-  buf[8]=headerSize&0xFF;buf[9]=(headerSize>>8)&0xFF;
-  buf[10]=recSize&0xFF;buf[11]=(recSize>>8)&0xFF;
+  dv.setUint8(1,d.getFullYear()-1900);dv.setUint8(2,d.getMonth()+1);dv.setUint8(3,d.getDate());
+  dv.setInt32(4,records.length,true);
+  dv.setInt16(8,headerSize,true);
+  dv.setInt16(10,recSize,true);
 
-  // Field descriptors
   fields.forEach((f,i)=>{
     const o=32+i*32;
     const nb=enc.encode(f.name.substring(0,10).padEnd(11,'\0'));
-    nb.forEach((b,j)=>buf[o+j]=b);
-    buf[o+11]=f.type.charCodeAt(0);
-    buf[o+16]=f.len;buf[o+17]=f.dec||0;
+    nb.forEach((b,j)=>dv.setUint8(o+j,b));
+    dv.setUint8(o+11,f.type.charCodeAt(0));
+    dv.setUint8(o+16,f.len);
+    dv.setUint8(o+17,f.dec||0);
   });
-  buf[32+fields.length*32]=0x0D; // header terminator
+  dv.setUint8(32+fields.length*32,0x0D); // header terminator
 
-  // Records
+  const bytes = new Uint8Array(buf);
   records.forEach((rec,i)=>{
-    let o=headerSize+i*recSize;
-    buf[o++]=0x20; // deletion flag
+    let o = headerSize + i*recSize;
+    bytes[o++] = 0x20; // not deleted
     for(const f of fields){
-      const val=String(rec[f.name]||'').substring(0,f.len).padEnd(f.len,' ');
-      enc.encode(val).forEach(b=>buf[o++]=b);
+      const val = String(rec[f.name]===undefined?'':rec[f.name]).substring(0,f.len).padEnd(f.len,' ');
+      enc.encode(val).forEach(b=>bytes[o++]=b);
     }
   });
-  return buf;
+  return new Uint8Array(buf);
 }
 
+// ── PRJ — RD New (EPSG:28992) ───────────────────────────────────────────────
 function buildPrj(){
-  // RD New projectie WKT
-  return `PROJCS["RD_New",GEOGCS["GCS_Amersfoort",DATUM["D_Amersfoort",SPHEROID["Bessel_1841",6377397.155,299.1528128]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Double_Stereographic"],PARAMETER["False_Easting",155000.0],PARAMETER["False_Northing",463000.0],PARAMETER["Central_Meridian",5.38720621],PARAMETER["Scale_Factor",0.9999079],PARAMETER["Latitude_Of_Origin",52.15616056],UNIT["Meter",1.0]]`;
+  return 'PROJCS["Amersfoort_RD_New",GEOGCS["GCS_Amersfoort",DATUM["D_Amersfoort",SPHEROID["Bessel_1841",6377397.155,299.1528128]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Double_Stereographic"],PARAMETER["False_Easting",155000.0],PARAMETER["False_Northing",463000.0],PARAMETER["Central_Meridian",5.38720621],PARAMETER["Scale_Factor",0.9999079],PARAMETER["Latitude_Of_Origin",52.15616056],UNIT["Meter",1.0]]';
 }
 
 // ── CONVERT ────────────────────────────────────────────────────────────────
@@ -201,7 +250,7 @@ async function doConvert(){
     log(`${topo.length} punten, ${linept.length} lijnpunten gevonden`,'ok');
     if(!topo.length&&!linept.length)throw new Error('Geen punten gevonden.');
 
-    // Lijngroepen
+    // Groepeer lijnpunten op code
     const groups={},extra=[];
     for(const p of linept){(groups[p.code||'onbekend']=groups[p.code||'onbekend']||[]).push(p);}
     const lines=[];
@@ -211,68 +260,63 @@ async function doConvert(){
     }
     const allPts=[...topo,...extra];
 
-    log('Shapefile bestanden opbouwen...','in');
+    log('Shapefile bestanden schrijven...','in');
     const zip=new JSZip();
     const prj=buildPrj();
-    const baseName=selFile.name.replace(/\.spj$/i,'');
+    const base=selFile.name.replace(/\.spj$/i,'');
 
-    // ── Punten shapefile ──
+    // Punten
     if(allPts.length){
       const shp=buildPointShp(allPts);
       const shx=buildPointShx(allPts);
-      const fields=[
-        {name:'NAAM',type:'C',len:20},
-        {name:'CODE',type:'C',len:30},
-        {name:'HOOGTE',type:'N',len:10,dec:3},
-      ];
-      const recs=allPts.map(p=>({NAAM:p.name,CODE:p.code,HOOGTE:p.z.toFixed(3)}));
-      const dbf=buildDbf(recs,fields);
-      zip.file(`${baseName}_punten.shp`,shp);
-      zip.file(`${baseName}_punten.shx`,shx);
-      zip.file(`${baseName}_punten.dbf`,dbf);
-      zip.file(`${baseName}_punten.prj`,prj);
+      const dbf=buildDbf(
+        allPts.map(p=>({NAAM:p.name,CODE:p.code,HOOGTE:Number(p.z.toFixed(3))})),
+        [{name:'NAAM',type:'C',len:20,dec:0},{name:'CODE',type:'C',len:30,dec:0},{name:'HOOGTE',type:'N',len:10,dec:3}]
+      );
+      zip.file(`${base}_punten.shp`,shp);
+      zip.file(`${base}_punten.shx`,shx);
+      zip.file(`${base}_punten.dbf`,dbf);
+      zip.file(`${base}_punten.prj`,prj);
       log(`Puntlaag: ${allPts.length} punten`,'ok');
     }
 
-    // ── Lijnen shapefile ──
+    // Lijnen
     if(lines.length){
       const{shp,shx}=buildLineShp(lines);
-      const fields=[{name:'CODE',type:'C',len:30},{name:'AANTAL_PT',type:'N',len:5,dec:0}];
-      const recs=lines.map(l=>({CODE:l.code,AANTAL_PT:l.pts.length}));
-      const dbf=buildDbf(recs,fields);
-      zip.file(`${baseName}_lijnen.shp`,shp);
-      zip.file(`${baseName}_lijnen.shx`,shx);
-      zip.file(`${baseName}_lijnen.dbf`,dbf);
-      zip.file(`${baseName}_lijnen.prj`,prj);
+      const dbf=buildDbf(
+        lines.map(l=>({CODE:l.code,AANTAL_PT:l.pts.length})),
+        [{name:'CODE',type:'C',len:30,dec:0},{name:'AANTAL_PT',type:'N',len:5,dec:0}]
+      );
+      zip.file(`${base}_lijnen.shp`,shp);
+      zip.file(`${base}_lijnen.shx`,shx);
+      zip.file(`${base}_lijnen.dbf`,dbf);
+      zip.file(`${base}_lijnen.prj`,prj);
       log(`Lijnlaag: ${lines.length} lijnen`,'ok');
     }
 
     log('ZIP aanmaken...','in');
     const zipBlob=await zip.generateAsync({type:'blob'});
     const url=URL.createObjectURL(zipBlob);
-    const fname=`${baseName}_shapefiles.zip`;
-
-    document.getElementById('dl').innerHTML=`
-      <a class="dl-btn" href="${url}" download="${fname}">⬇ Download ${fname}</a>`;
+    const fname=`${base}_shapefiles.zip`;
+    document.getElementById('dl').innerHTML=`<a class="dl-btn" href="${url}" download="${fname}">&#11015; Download ${fname}</a>`;
     document.getElementById('res').classList.add('show');
-    log(`Klaar! ZIP bevat ${allPts.length} punten en ${lines.length} lijnen.`,'ok');
+    log(`Klaar! ${allPts.length} punten en ${lines.length} lijnen.`,'ok');
 
   }catch(e){log('Fout: '+e.message,'er');console.error(e);}
-  finally{btn.disabled=false;btn.innerHTML='Omzetten naar Shapefile →';updateBtn();}
+  finally{btn.disabled=false;btn.innerHTML='Omzetten naar Shapefile &#8594;';updateBtn();}
 }
 
 // ── UI ─────────────────────────────────────────────────────────────────────
 const logEl=document.getElementById('log');
 function log(m,t){const s=document.createElement('span');s.className=t;s.textContent=`> ${m}\n`;logEl.appendChild(s);logEl.scrollTop=logEl.scrollHeight;}
 function clearLog(){logEl.innerHTML='';}
-
 let selFile=null;
 function setFile(f){
   if(!f||!f.name.toLowerCase().endsWith('.spj')){log('Alleen .spj bestanden.','er');return;}
   selFile=f;
   const d=document.getElementById('drop');
   d.classList.add('ok');
-  d.innerHTML=`<div class="ico">📄</div><div class="fn">${f.name}</div><div class="lbl" style="font-size:11px;margin-top:4px">${(f.size/1024).toFixed(1)} KB</div>`;
+  d.innerHTML=`<div class="ico">&#128196;</div><div class="fn">${f.name}</div><div class="lbl" style="font-size:11px;margin-top:4px">${(f.size/1024).toFixed(1)} KB</div>`;
   updateBtn();
 }
 const dz=document.getElementById('drop');
