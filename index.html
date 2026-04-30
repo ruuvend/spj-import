@@ -2,7 +2,7 @@
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
-<title>SPJ naar Shapefile</title>
+<title>SPJ naar GeoJSON</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap');
@@ -32,7 +32,7 @@ h2 span{font-family:'DM Mono',monospace;font-size:10px;color:#7a7368;letter-spac
 </style>
 </head>
 <body>
-<h2>&#128205; SPJ naar Shapefile <span>TRIMBLE CONVERTER</span></h2>
+<h2>&#128205; SPJ naar GeoJSON <span>TRIMBLE CONVERTER</span></h2>
 <div id="drop" onclick="document.getElementById('fi').click()">
   <div class="ico">&#128194;</div>
   <div class="lbl">Sleep een <strong>.spj</strong> bestand hierheen<br>of klik om te bladeren</div>
@@ -264,46 +264,31 @@ async function doConvert(){
     log('GeoJSON bestanden schrijven...','in');
     const base=selFile.name.replace(/\.spj$/i,'');
 
-    // GeoJSON punten
-    const puntGeoJSON = {
+    // Combineer alles in één GeoJSON
+    const geoJSON = {
       type:'FeatureCollection',
-      name:`${base}_punten`,
+      name:base,
       crs:{type:'name',properties:{name:'urn:ogc:def:crs:EPSG::28992'}},
-      features: allPts.map(p=>({
-        type:'Feature',
-        geometry:{type:'Point',coordinates:[p.x,p.y,p.z]},
-        properties:{naam:p.name,code:p.code,hoogte:Math.round(p.z*1000)/1000}
-      }))
-    };
-
-    // GeoJSON lijnen
-    const lijnGeoJSON = {
-      type:'FeatureCollection',
-      name:`${base}_lijnen`,
-      crs:{type:'name',properties:{name:'urn:ogc:def:crs:EPSG::28992'}},
-      features: lines.map(l=>({
-        type:'Feature',
-        geometry:{type:'LineString',coordinates:l.coords.map(([x,y])=>[x,y])},
-        properties:{code:l.code,aantal_pt:l.pts.length}
-      }))
+      features:[
+        ...allPts.map(p=>({
+          type:'Feature',
+          geometry:{type:'Point',coordinates:[p.x,p.y,p.z]},
+          properties:{naam:p.name,code:p.code,hoogte:Math.round(p.z*1000)/1000,type:'punt'}
+        })),
+        ...lines.map(l=>({
+          type:'Feature',
+          geometry:{type:'LineString',coordinates:l.coords.map(([x,y])=>[x,y])},
+          properties:{naam:'',code:l.code,hoogte:null,type:'lijn',aantal_pt:l.pts.length}
+        }))
+      ]
     };
 
     const dl = document.getElementById('dl');
     dl.innerHTML = '';
-
-    if(allPts.length){
-      const blob=new Blob([JSON.stringify(puntGeoJSON,null,2)],{type:'application/json'});
-      const url=URL.createObjectURL(blob);
-      dl.innerHTML+=`<a class="dl-btn" href="${url}" download="${base}_punten.geojson">&#11015; Download punten.geojson (${allPts.length} punten)</a><br>`;
-      log(`Puntlaag: ${allPts.length} punten`,'ok');
-    }
-
-    if(lines.length){
-      const blob=new Blob([JSON.stringify(lijnGeoJSON,null,2)],{type:'application/json'});
-      const url=URL.createObjectURL(blob);
-      dl.innerHTML+=`<a class="dl-btn" href="${url}" download="${base}_lijnen.geojson">&#11015; Download lijnen.geojson (${lines.length} lijnen)</a>`;
-      log(`Lijnlaag: ${lines.length} lijnen`,'ok');
-    }
+    const blob=new Blob([JSON.stringify(geoJSON,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    dl.innerHTML=`<a class="dl-btn" href="${url}" download="${base}.geojson">&#11015; Download ${base}.geojson</a>`;
+    log(`${allPts.length} punten en ${lines.length} lijnen`,'ok');
     document.getElementById('res').classList.add('show');
     log(`Klaar! ${allPts.length} punten en ${lines.length} lijnen.`,'ok');
 
