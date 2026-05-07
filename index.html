@@ -64,148 +64,194 @@ body{font-family:'DM Sans',sans-serif;background:#f0ede8;color:#1c1a17;min-heigh
 <div id="log"><span class="di">&gt; Wacht op bestand...</span></div>
 <div id="res"><strong>&#10003; Klaar!</strong><br><div id="dl"></div></div>
 
-<div class="app-footer">@RV &nbsp;&middot;&nbsp; Geo-informatie &nbsp;&middot;&nbsp; v1.1</div>
+<div class="app-footer">@RV &nbsp;&middot;&nbsp; Geo-informatie &nbsp;&middot;&nbsp; v1.3</div>
 
 </div>
 
 <script>
-// ── TELLER (localStorage — blijft bewaard na herladen) ───────────────────────
+// ── TELLER (localStorage) ────────────────────────────────────────────────────
 const COUNTER_KEY = 'agterberg_convert_count';
-
 function loadCounter(){
   const val = localStorage.getItem(COUNTER_KEY);
   document.getElementById('cnt').textContent = val !== null ? val : '0';
 }
-
 function bumpCounter(){
-  const current = parseInt(localStorage.getItem(COUNTER_KEY) || '0', 10);
-  const next = current + 1;
+  const next = (parseInt(localStorage.getItem(COUNTER_KEY) || '0', 10)) + 1;
   localStorage.setItem(COUNTER_KEY, String(next));
   document.getElementById('cnt').textContent = next;
 }
 
-// ── SPJ PARSER ──────────────────────────────────────────────────────────────
-const OY=84,OX=92,OZ=100;
-function ru16(b,o){let e=o;while(e+1<b.length&&!(b[e]===0&&b[e+1]===0))e+=2;return new TextDecoder('utf-16le').decode(b.slice(o,e));}
-function nu16(b,o,d=120){let i=o,e=Math.min(o+d,b.length-2);while(i<e){if(b[i]>=0x20&&b[i]<=0x7E&&b[i+1]===0){const s=ru16(b,i);if(s.length>=2)return s;}i+=2;}return '';}
-function rf64(v,o){return o+8>v.byteLength?null:v.getFloat64(o,true);}
-function fpat(b,p){const r=[];outer:for(let i=0;i<=b.length-p.length;i++){for(let j=0;j<p.length;j++)if(b[i+j]!==p[j])continue outer;r.push(i);}return r;}
-function parseSpj(buf){
-  const b=new Uint8Array(buf),v=new DataView(buf);
-  const c=[];
-  for(const pos of fpat(b,[0x54,0x00,0x6F,0x00,0x70,0x00,0x6F,0x00])){const n=ru16(b,pos);if(/^Topo[\d+]*$/.test(n))c.push({pos,type:'topo',name:n});}
-  for(const pos of fpat(b,[0x4C,0x00,0x69,0x00,0x6E,0x00,0x65,0x00,0x50,0x00,0x74,0x00])){const n=ru16(b,pos);if(/^LinePt\d*$/.test(n))c.push({pos,type:'linept',name:n});}
-  c.sort((a,b)=>a.pos-b.pos);
-  const topo=[],linept=[];
-  for(const{pos,type,name}of c){
-    const y=rf64(v,pos+OY),x=rf64(v,pos+OX),z=rf64(v,pos+OZ);
-    if(!x||!y||!z||!(x>7000&&x<300000&&y>289000&&y<629000)||!(z>-50&&z<500))continue;
-    let code=nu16(b,pos+name.length*2+2,80);
-    if(['tablet','sams','trimble','sps','eap','topo','linept'].some(s=>code.toLowerCase().includes(s)))code='';
-    (type==='topo'?topo:linept).push({name,code,x,y,z});
+// ── SPJ PARSER ───────────────────────────────────────────────────────────────
+// Offsets voor Y, X, Z relatief aan het begin van de naam-string
+const OY=84, OX=92, OZ=100;
+
+function ru16(b, o){
+  let e = o;
+  while (e+1 < b.length && !(b[e]===0 && b[e+1]===0)) e += 2;
+  return new TextDecoder('utf-16le').decode(b.slice(o, e));
+}
+function nu16(b, o, d=120){
+  let i=o, e=Math.min(o+d, b.length-2);
+  while(i<e){
+    if(b[i]>=0x20 && b[i]<=0x7E && b[i+1]===0){const s=ru16(b,i);if(s.length>=2)return s;}
+    i+=2;
   }
-  return{topo,linept};
+  return '';
+}
+function rf64(v, o){ return o+8>v.byteLength ? null : v.getFloat64(o, true); }
+
+function parseSpj(buf){
+  const b = new Uint8Array(buf);
+  const v = new DataView(buf);
+  const seen = new Set();
+  const topo = [], linept = [];
+
+  // Scan het hele bestand naar UTF-16LE strings gevolgd door geldige RD-coördinaten
+  // op de vaste offsets OY=84, OX=92, OZ=100 (relatief aan string-start)
+  let i = 0;
+  while (i < b.length - OZ - 8) {
+    // Check op start van een UTF-16LE karakter (printbaar ASCII + nulbyte)
+    if (b[i+1] === 0 && b[i] >= 0x20 && b[i] <= 0x7E) {
+      const s = ru16(b, i);
+      if (s.length >= 1 && s.length <= 40 && i + OZ + 8 <= b.length) {
+        const y = v.getFloat64(i + OY, true);
+        const x = v.getFloat64(i + OX, true);
+        const z = v.getFloat64(i + OZ, true);
+
+        if (x > 7000 && x < 300000 && y > 289000 && y < 629000 && z > -100 && z < 500 && !seen.has(i)) {
+          seen.add(i);
+
+          // Bepaal type: LinePt = lijnpunt, anders punt
+          const isLine = /^LinePt/i.test(s);
+
+          // Code staat direct na de null-terminator van de naam
+          const codeOffset = i + s.length*2 + 2;
+          let code = nu16(b, codeOffset, 80);
+          // Filter device-namen uit het code-veld
+          const deviceWords = ['tablet','sams','trimble','sps','eap','topo','linept'];
+          if (deviceWords.some(w => code.toLowerCase().includes(w))) code = '';
+
+          // Gebruik de laagnaam als code als er geen expliciete code is
+          // Strip nummers aan het einde van de laagnaam (bijv. 'hoogte meting5' -> 'hoogte meting')
+          const layerBase = s.replace(/\d+$/, '').trim();
+
+          const pt = {
+            name: s,
+            code: code || layerBase,
+            x, y, z
+          };
+
+          (isLine ? linept : topo).push(pt);
+        }
+      }
+      i += Math.max(s.length * 2 + 2, 2);
+      continue;
+    }
+    i += 2;
+  }
+
+  return { topo, linept };
 }
 
-// ── PNT PARSER ──────────────────────────────────────────────────────────────
+// ── PNT PARSER ───────────────────────────────────────────────────────────────
 function parsePnt(text){
-  const pts=[];
+  const pts = [];
   for(const line of text.split(/\r?\n/).filter(l=>l.trim())){
-    const c=line.split('\t');
-    if(c.length<3)continue;
-    const x=parseFloat(c[0]),y=parseFloat(c[1]),z=parseFloat(c[2]);
-    if(isNaN(x)||isNaN(y)||isNaN(z))continue;
-    if(!(x>7000&&x<300000&&y>289000&&y<629000))continue;
-    pts.push({name:(c[3]||'').trim(),code:(c[7]||c[6]||'').trim(),datum:(c[5]||'').trim(),x,y,z});
+    const c = line.split('\t');
+    if(c.length < 3) continue;
+    const x=parseFloat(c[0]), y=parseFloat(c[1]), z=parseFloat(c[2]);
+    if(isNaN(x)||isNaN(y)||isNaN(z)) continue;
+    if(!(x>7000&&x<300000&&y>289000&&y<629000)) continue;
+    pts.push({name:(c[3]||'').trim(), code:(c[7]||c[6]||'').trim(), datum:(c[5]||'').trim(), x, y, z});
   }
   return pts;
 }
 
-// ── CONVERT ─────────────────────────────────────────────────────────────────
+// ── CONVERT ──────────────────────────────────────────────────────────────────
 async function doConvert(){
-  const btn=document.getElementById('btn');
-  btn.disabled=true;btn.innerHTML='<span class="sp"></span>Bezig...';
-  clearLog();document.getElementById('res').classList.remove('show');
-  try{
-    log('Bestand inlezen...','in');
+  const btn = document.getElementById('btn');
+  btn.disabled = true; btn.innerHTML = '<span class="sp"></span>Bezig...';
+  clearLog(); document.getElementById('res').classList.remove('show');
+  try {
+    log('Bestand inlezen...', 'in');
     bumpCounter();
 
-    const base=selFile.name.replace(/\.(spj|pnt)$/i,'');
-    const isPnt=selFile.name.toLowerCase().endsWith('.pnt');
-    let allPts=[],lines=[];
+    const base = selFile.name.replace(/\.(spj|pnt)$/i, '');
+    const isPnt = selFile.name.toLowerCase().endsWith('.pnt');
+    let allPts = [], lines = [];
 
     if(isPnt){
-      log('PNT parsen...','in');
-      const text=await selFile.text();
-      allPts=parsePnt(text);
-      log(`${allPts.length} punten gevonden`,'ok');
-      if(!allPts.length)throw new Error('Geen geldige punten gevonden in PNT bestand.');
+      log('PNT parsen...', 'in');
+      const text = await selFile.text();
+      allPts = parsePnt(text);
+      log(`${allPts.length} punten gevonden`, 'ok');
+      if(!allPts.length) throw new Error('Geen geldige punten gevonden in PNT bestand.');
     } else {
-      log('SPJ parsen...','in');
-      const buf=await selFile.arrayBuffer();
-      const{topo,linept}=parseSpj(buf);
-      log(`${topo.length} punten, ${linept.length} lijnpunten gevonden`,'ok');
-      if(!topo.length&&!linept.length)throw new Error('Geen punten gevonden.');
-      const groups={},extra=[];
-      for(const p of linept)(groups[p.code||'onbekend']=groups[p.code||'onbekend']||[]).push(p);
-      for(const[code,pts]of Object.entries(groups)){
-        if(pts.length<2){extra.push(...pts);continue;}
-        lines.push({code,coords:pts.map(p=>[p.x,p.y]),pts});
+      log('SPJ parsen...', 'in');
+      const buf = await selFile.arrayBuffer();
+      const {topo, linept} = parseSpj(buf);
+      log(`${topo.length} punten, ${linept.length} lijnpunten gevonden`, 'ok');
+      if(!topo.length && !linept.length) throw new Error('Geen geldige punten gevonden in SPJ bestand.');
+
+      const groups = {}, extra = [];
+      for(const p of linept)(groups[p.code||'onbekend'] = groups[p.code||'onbekend'] || []).push(p);
+      for(const [code, pts] of Object.entries(groups)){
+        if(pts.length < 2){ extra.push(...pts); continue; }
+        lines.push({code, coords: pts.map(p=>[p.x,p.y]), pts});
       }
-      allPts=[...topo,...extra];
+      allPts = [...topo, ...extra];
     }
 
-    log('GeoJSON bouwen...','in');
-    const geoJSON={
-      type:'FeatureCollection',
-      name:base,
-      crs:{type:'name',properties:{name:'urn:ogc:def:crs:EPSG::28992'}},
-      features:[
-        ...allPts.map(p=>({
-          type:'Feature',
-          geometry:{type:'Point',coordinates:[p.x,p.y,p.z]},
-          properties:{naam:p.name,code:p.code,hoogte:Math.round(p.z*1000)/1000,datum:p.datum||'',type:'punt'}
+    log('GeoJSON bouwen...', 'in');
+    const geoJSON = {
+      type: 'FeatureCollection',
+      name: base,
+      crs: {type:'name', properties:{name:'urn:ogc:def:crs:EPSG::28992'}},
+      features: [
+        ...allPts.map(p => ({
+          type: 'Feature',
+          geometry: {type:'Point', coordinates:[p.x, p.y, p.z]},
+          properties: {naam:p.name, code:p.code, hoogte:Math.round(p.z*1000)/1000, datum:p.datum||'', type:'punt'}
         })),
-        ...lines.map(l=>({
-          type:'Feature',
-          geometry:{type:'LineString',coordinates:l.coords.map(([x,y])=>[x,y])},
-          properties:{naam:'',code:l.code,hoogte:null,datum:'',type:'lijn',aantal_pt:l.pts.length}
+        ...lines.map(l => ({
+          type: 'Feature',
+          geometry: {type:'LineString', coordinates:l.coords.map(([x,y])=>[x,y])},
+          properties: {naam:'', code:l.code, hoogte:null, datum:'', type:'lijn', aantal_pt:l.pts.length}
         }))
       ]
     };
 
-    const blob=new Blob([JSON.stringify(geoJSON,null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob);
-    document.getElementById('dl').innerHTML=
+    const blob = new Blob([JSON.stringify(geoJSON,null,2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    document.getElementById('dl').innerHTML =
       `<a class="dl-btn" href="${url}" download="${base}.geojson">&#11015; Download ${base}.geojson</a>`;
     document.getElementById('res').classList.add('show');
-    log(`Klaar! ${allPts.length} punten en ${lines.length} lijnen.`,'ok');
+    log(`Klaar! ${allPts.length} punten en ${lines.length} lijnen.`, 'ok');
 
-  }catch(e){log('Fout: '+e.message,'er');console.error(e);}
-  finally{btn.disabled=false;btn.innerHTML='Omzetten naar GeoJSON &#8594;';updateBtn();}
+  } catch(e){ log('Fout: '+e.message,'er'); console.error(e); }
+  finally{ btn.disabled=false; btn.innerHTML='Omzetten naar GeoJSON &#8594;'; updateBtn(); }
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────
-const logEl=document.getElementById('log');
-function log(m,t){const s=document.createElement('span');s.className=t;s.textContent=`> ${m}\n`;logEl.appendChild(s);logEl.scrollTop=logEl.scrollHeight;}
-function clearLog(){logEl.innerHTML='';}
-let selFile=null;
+const logEl = document.getElementById('log');
+function log(m,t){ const s=document.createElement('span'); s.className=t; s.textContent=`> ${m}\n`; logEl.appendChild(s); logEl.scrollTop=logEl.scrollHeight; }
+function clearLog(){ logEl.innerHTML=''; }
+let selFile = null;
 function setFile(f){
-  if(!f||!f.name.toLowerCase().match(/\.(spj|pnt)$/)){log('Alleen .spj of .pnt bestanden.','er');return;}
-  selFile=f;
-  const d=document.getElementById('drop');
+  if(!f||!f.name.toLowerCase().match(/\.(spj|pnt)$/)){ log('Alleen .spj of .pnt bestanden.','er'); return; }
+  selFile = f;
+  const d = document.getElementById('drop');
   d.classList.add('ok');
-  d.innerHTML=`<div class="ico">&#128196;</div><div class="fn">${f.name}</div><div class="lbl" style="font-size:11px;margin-top:4px">${(f.size/1024).toFixed(1)} KB</div>`;
+  d.innerHTML = `<div class="ico">&#128196;</div><div class="fn">${f.name}</div><div class="lbl" style="font-size:11px;margin-top:4px">${(f.size/1024).toFixed(1)} KB</div>`;
   updateBtn();
 }
-const dz=document.getElementById('drop');
-dz.addEventListener('dragover',e=>{e.preventDefault();dz.classList.add('over');});
-dz.addEventListener('dragleave',()=>dz.classList.remove('over'));
-dz.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('over');setFile(e.dataTransfer.files[0]);});
-document.getElementById('fi').addEventListener('change',e=>setFile(e.target.files[0]));
-function updateBtn(){document.getElementById('btn').disabled=!selFile;}
+const dz = document.getElementById('drop');
+dz.addEventListener('dragover', e=>{ e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', ()=>dz.classList.remove('over'));
+dz.addEventListener('drop', e=>{ e.preventDefault(); dz.classList.remove('over'); setFile(e.dataTransfer.files[0]); });
+document.getElementById('fi').addEventListener('change', e=>setFile(e.target.files[0]));
+function updateBtn(){ document.getElementById('btn').disabled = !selFile; }
 
-// Teller laden bij start
 loadCounter();
 </script>
 </body>
